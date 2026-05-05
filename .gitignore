@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+myenv/
+env/
+venv/
+*.exe
+
+# Sensitive files
+.env
+*.env
+config.py
+
+# Excel files (temporary/backup)
+*.xlsx
+~$*
+
+# Logs and output
+*.log
+*.png
+*.jpg
+*.msg
+*.html
+scraper_output/
+logs/
+history/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+test.py
+post_test.py
+metal_app.py
+*_test.py
+test_*.py
+
+# Git
+.gitignore
+.git/
+
+# Miscellaneous
+~$*
+*.bak
+*.tmp
+mail_preview.html
+scrape_metals_v2.py
