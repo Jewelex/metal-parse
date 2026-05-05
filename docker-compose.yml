@@ -1,0 +1,20 @@
+version: "3.9"
+ 
+services:
+  app:
+    build: .
+    container_name: metal-parse
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./logs:/app/logs
+    shm_size: "512mb"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+ 

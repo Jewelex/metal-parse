@@ -36,13 +36,6 @@ history/
 *~
 .DS_Store
 
-# Testing
-test.py
-post_test.py
-metal_app.py
-*_test.py
-test_*.py
-
 # Git
 .gitignore
 .git/
