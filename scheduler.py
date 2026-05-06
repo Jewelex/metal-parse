@@ -101,4 +101,16 @@ def main():
         scheduler.shutdown()
 
 if __name__ == "__main__":
+    RUN_FOLDER = Path(r"C:\Users\Aman.gupta\Downloads\metal-rate-bot\scraper_output\04-05-2026_02-48-20PM")
+
+    master_path = RUN_FOLDER / "master.json"
+
+    print(f"\n📂 Loading: {master_path}")
+
+    with open(master_path, "r", encoding="utf-8") as f:
+        master_data = json.load(f)
+
+    build_rates_table(master_data, RUN_FOLDER, debug=True)
+
     main()
+ 
