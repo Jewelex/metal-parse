@@ -218,7 +218,6 @@ def create_driver(headless: bool = True) -> webdriver.Chrome:
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1400,900")
-    options.add_argument("--start-maximized")
     options.add_argument("--lang=en-US")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
