@@ -220,15 +220,3 @@ def build_rates_table(master_data: dict, output_folder: Path, debug=True):
     log("✅ ENGINE COMPLETE")
 
 
-##Test
-RUN_FOLDER = Path(r"D:\Projects\metal-parse\scraper_output\07-05-2026_11-09-08AM")
-
-master_path = RUN_FOLDER / "master.json"
-
-print(f"\n📂 Loading: {master_path}")
-
-with open(master_path, "r", encoding="utf-8") as f:
-    master_data = json.load(f)
-
-# Run your function
-build_rates_table(master_data, RUN_FOLDER, debug=True)
