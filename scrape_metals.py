@@ -201,6 +201,15 @@ All numeric fields must be numbers. Use null if missing.
 # SELENIUM DRIVER SETUP
 # ─────────────────────────────────────────────────────────────────────────────
 
+def replace_nulls(obj):
+    if isinstance(obj, dict):
+        return {k: replace_nulls(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [replace_nulls(i) for i in obj]
+    elif obj is None:
+        return ""
+    return obj
+
 def create_driver(headless: bool = True) -> webdriver.Chrome:
     """
     Create a Chrome WebDriver that looks like a real user browser.
@@ -537,6 +546,8 @@ def call_groq(client: Groq, site_source: str, scraped: dict, scraped_at: str) ->
         raw = re.sub(r"\s*```$",          "", raw)
 
         result = json.loads(raw)
+        
+        result = replace_nulls(result)   # ← add this
         print(f"    ✅  JSON extracted  ({len(result)} top-level keys)")
         return result
 

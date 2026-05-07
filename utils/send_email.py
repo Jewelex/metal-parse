@@ -35,7 +35,7 @@ def send_metal_rate_report(run_folder, recipient_emails):
     
     try:
         # Connect to SMTP
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=60)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         
@@ -103,12 +103,12 @@ def send_metal_rate_report(run_folder, recipient_emails):
         return False
 
 
-# if __name__ == "__main__":
-#     from pathlib import Path
+if __name__ == "__main__":
+    from pathlib import Path
     
-#     base_folder = Path(r"C:\Users\Aman.gupta\Downloads\metal-rate-bot\scraper_output")
-#     if base_folder.exists():
-#         folders = [f for f in base_folder.iterdir() if f.is_dir()]
-#         if folders:
-#             latest = max(folders, key=lambda f: f.stat().st_ctime)
-#             send_metal_rate_report(latest, ["swaraj.borse@jewelexindia.com"])
+    base_folder = Path(r"C:\Users\Aman.gupta\Downloads\metal-rate-bot\scraper_output")
+    if base_folder.exists():
+        folders = [f for f in base_folder.iterdir() if f.is_dir()]
+        if folders:
+            latest = max(folders, key=lambda f: f.stat().st_ctime)
+            send_metal_rate_report(latest, ["swaraj.borse@jewelexindia.com"])
