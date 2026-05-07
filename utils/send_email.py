@@ -35,7 +35,7 @@ def send_metal_rate_report(run_folder, recipient_emails):
     
     try:
         # Connect to SMTP
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=60)
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=120)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         

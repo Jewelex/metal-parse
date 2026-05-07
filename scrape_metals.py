@@ -681,6 +681,7 @@ def main():
     # ── Build HTML table ─────────────────────────────
     build_rates_table(master, run_folder)
     RECIPIENTS = ["aman.gupta@jewelexindia.com", "ketan.shah@bitalinfo.com", "aashay.mehta@jewelexindia.com"]  # CHANGE THIS!
+    # RECIPIENTS = ["aman.gupta@jewelexindia.com", "aashay.mehta@jewelexindia.com"]
     send_metal_rate_report(run_folder, RECIPIENTS)
 
     # ── Final summary ─────────────────────────────────────────────────────────

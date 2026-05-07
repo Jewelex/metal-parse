@@ -1,12 +1,10 @@
 from pathlib import Path
-# from goldformula import calculate_gold_rate
-# from platinumformula import calculate_platinum_rate
-
 import json
-
-from pathlib import Path
+from datetime import date
 from utils.goldformula import calculate_gold_rate
 from utils.platinumformula import calculate_platinum_rate
+# from goldformula import calculate_gold_rate
+# from platinumformula import calculate_platinum_rate
 
 
 def build_rates_table(master_data: dict, output_folder: Path, debug=True):
@@ -21,216 +19,216 @@ def build_rates_table(master_data: dict, output_folder: Path, debug=True):
 
     data = master_data["data"]
 
-    kitco = data.get("kitco", {})
-    rsbl = data.get("rsbl", {})
-    arihant = data.get("arihantspot", {})
+    kitco           = data.get("kitco", {})
+    rsbl            = data.get("rsbl", {})
+    arihant         = data.get("arihantspot", {})
     palladium_india = data.get("goldpriceindia_palladium", {})
 
-    # ─────────────────────────────────────────────
-    # KITCO ASK EXTRACTION
-    # ─────────────────────────────────────────────
+    # ── KITCO ASK ──────────────────────────────────────────────────────────
     kitco_prices = {}
     for item in kitco.get("world_spot_prices", []):
-        metal = item["metal"]
         ask = item.get("ask_usd_oz")
         if ask:
-            kitco_prices[metal] = ask
+            kitco_prices[item["metal"]] = ask
 
-    log("\n📊 KITCO ASK PRICES:")
-    for k, v in kitco_prices.items():
-        log(f"   {k}: {v}")
-
-    # ─────────────────────────────────────────────
-    # FOREX
-    # ─────────────────────────────────────────────
+    # ── FOREX ──────────────────────────────────────────────────────────────
     forex = rsbl.get("header_rates", {}).get("usd_inr", 95)
-    log(f"\n💱 USD/INR: {forex}")
 
-    # ─────────────────────────────────────────────
-    # GOLD CALCULATION
-    # ─────────────────────────────────────────────
-    gold_calc = calculate_gold_rate(
-        gold_rate=kitco_prices.get("GOLD"),
-        forex_rate=forex
-    )
+    # ── GOLD ───────────────────────────────────────────────────────────────
+    gold_calc = calculate_gold_rate(gold_rate=kitco_prices.get("GOLD"), forex_rate=forex)
+    gold_999  = gold_calc["rate_for_10gm_999"]
+    gold_995  = gold_calc["rate_for_10gm_995"]
 
-    gold_999 = gold_calc["rate_for_10gm_999"]
-    gold_995 = gold_calc["rate_for_10gm_995"]
+    # ── PLATINUM ───────────────────────────────────────────────────────────
+    plat_calc_999 = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex, purity=999)
+    plat_calc_950 = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex, purity=950)
+    platinum_999  = plat_calc_999["rate_for_10gm_999"]
+    platinum_950  = plat_calc_950["rate_for_10gm_999"]
 
-    log("\n🟡 GOLD CALCULATION:")
-    log(gold_calc)
-
-    # ─────────────────────────────────────────────
-    # PLATINUM
-    # ─────────────────────────────────────────────
-    plat_calc_999 = calculate_platinum_rate(
-        kitco_rate=kitco_prices.get("PLATINUM"),
-        forex_rate=forex,
-        purity=999
-    )
-
-    plat_calc_950 = calculate_platinum_rate(
-        kitco_rate=kitco_prices.get("PLATINUM"),
-        forex_rate=forex,
-        purity=950
-    )
-
-    platinum_999 = plat_calc_999["rate_for_10gm_999"]
-    platinum_950 = plat_calc_950["rate_for_10gm_999"]
-
-    log("\n⚪ PLATINUM 999:")
-    log(plat_calc_999)
-
-    log("\n⚪ PLATINUM 950:")
-    log(plat_calc_950)
-
-    # ─────────────────────────────────────────────
-    # PALLADIUM
-    # ─────────────────────────────────────────────
+    # ── PALLADIUM ──────────────────────────────────────────────────────────
     palladium_999 = palladium_india.get("spot_prices_inr", {}).get("10_gram")
 
-    kitco_palladium_999 = None
-    if kitco_prices.get("PALLADIUM"):
-        kitco_palladium_999 = (
-            kitco_prices["PALLADIUM"] / 31.1035 * forex * 10
-        )
-
-    log(f"\n🟣 PALLADIUM (India): {palladium_999}")
-    log(f"🟣 PALLADIUM (Kitco conv): {kitco_palladium_999}")
-
-    # ─────────────────────────────────────────────
-    # SILVER
-    # ─────────────────────────────────────────────
-    silver_rate = None
+    # ── SILVER ─────────────────────────────────────────────────────────────
+    silver_rate     = None
     rsbl_silver_raw = None
-
     for item in rsbl.get("commodity_rates", []):
         if "SILVER" in item["commodity"]:
             rsbl_silver_raw = item.get("sell")
-            silver_rate = rsbl_silver_raw / 100
+            silver_rate     = rsbl_silver_raw / 100
             break
 
-    kitco_silver = None
-    if kitco_prices.get("SILVER"):
-        kitco_silver = (
-            kitco_prices["SILVER"] / 31.1035 * forex * 10
-        )
-
-    log(f"\n🔵 SILVER RSBL raw: {rsbl_silver_raw}")
-    log(f"🔵 SILVER (₹/10g): {silver_rate}")
-    log(f"🔵 SILVER (Kitco conv): {kitco_silver}")
-
-    # ─────────────────────────────────────────────
-    # ARIHANT FILTER (FIXED)
-    # ─────────────────────────────────────────────
-    arihant_995 = None
-    arihant_999 = None
-
-    log("\n🏢 ARIHANT PRODUCTS:")
-
+    # ── ARIHANT ────────────────────────────────────────────────────────────
+    arihant_995 = arihant_999 = None
     for item in arihant.get("live_rates", []):
-        name = item["product"].upper()
+        name  = item["product"].upper()
         price = item.get("sell")
-
-        log(f"   {name} → {price}")
-
         if "995" in name and "1KG" in name:
             arihant_995 = price
-
         if "999" in name:
             arihant_999 = price
 
-    log(f"\nArihant 995: {arihant_995}")
-    log(f"Arihant 999: {arihant_999}")
-
-    # ─────────────────────────────────────────────
-    # RSBL DATA
-    # ─────────────────────────────────────────────
-    rsbl_gold_999 = None
-    rsbl_gold_995 = None
-
+    # ── RSBL ───────────────────────────────────────────────────────────────
+    rsbl_gold_999 = rsbl_gold_995 = None
     for item in rsbl.get("commodity_rates", []):
         if item["commodity"] == "GOLD999MUM":
             rsbl_gold_999 = item.get("sell")
         if item["commodity"] == "GOLD995MUM":
             rsbl_gold_995 = item.get("sell")
 
-    log(f"\n🏦 RSBL GOLD999: {rsbl_gold_999}")
-    log(f"🏦 RSBL GOLD995: {rsbl_gold_995}")
+    # ── FORMAT HELPER ──────────────────────────────────────────────────────
+    def fmt(val):
+        if val is None or val == "-":
+            return "-"
+        try:
+            return f"{round(float(val)):,}"
+        except Exception:
+            return str(val)
 
-    # ─────────────────────────────────────────────
-    # FINAL TABLE DATA
-    # ─────────────────────────────────────────────
-    rows = [
-        ["Gold", "10", "999", gold_999, rsbl_gold_999, arihant_999],
-        ["Gold", "10", "995", gold_995, rsbl_gold_995, arihant_995],
-        ["Platinum", "10", "999", platinum_999, "-", "-"],
-        ["Platinum", "10", "950", platinum_950, "-", "-"],
-        ["Palladium", "10", "999", palladium_999, "-", "-"],
-        ["Silver", "10", "-", silver_rate, rsbl_silver_raw / 100 if rsbl_silver_raw else "-", "-"],
+    today_str = date.today().strftime("%d-%b-%y")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # EXACT COLOR CODES
+    # ═══════════════════════════════════════════════════════════════════
+    #  Top stripe (salmon/coral)     #F4A7A3
+    #  Date header bg (purple)       #A45DB5   text #FFFFFF
+    #  Column header bg (dark red)   #C0392B   text #FFD700
+    #  Metal col – Gold rows         #FFD700
+    #            – Platinum rows     #FF69B4
+    #            – Palladium row     #BEBEBE
+    #            – Silver row        #FFD700
+    #  Grams col                     #BABABA
+    #  Purity col                    #FF69B4   text #000000
+    #  Today Rate col                #F6BEF8
+    #  RSBL col                      #D8D8D8
+    #  Arihant col                   #F4B183
+    #  Note row                      #BFEFFF
+    # ═══════════════════════════════════════════════════════════════════
+
+    METAL_BG = {
+        "Gold":      "#FFD700",
+        "Platinum":  "#FF69B4",
+        "Palladium": "#BEBEBE",
+        "Silver":    "#FFD700",
+    }
+
+    BORDER = "#0C0B0B"
+
+    def td(content, bg, text="#000000", bold=False, align="center"):
+        fw = "bold" if bold else "normal"
+        return (
+            f'<td style="background-color:{bg};color:{text};font-weight:{fw};'
+            f'font-size:13px;font-family:Arial,sans-serif;padding:6px 10px;'
+            f'text-align:{align};border:1px solid {BORDER};">{content}</td>'
+        )
+
+    def th(content, bg, text="#000000"):
+        return (
+            f'<th style="background-color:{bg};color:{text};font-weight:bold;'
+            f'font-size:13px;font-family:Arial,sans-serif;padding:7px 10px;'
+            f'text-align:center;border:1px solid {BORDER};">{content}</th>'
+        )
+
+    # ── TABLE ROWS ─────────────────────────────────────────────────────────
+    data_rows = [
+        ("Gold",      10, "999", gold_999,      rsbl_gold_999,                                       arihant_999),
+        ("Gold",      10, "995", gold_995,      rsbl_gold_995,                                       arihant_995),
+        ("Platinum",  10, "999", platinum_999,  "-",                                                 "-"),
+        ("Platinum",  10, "950", platinum_950,  "-",                                                 "-"),
+        ("Palladium", 10, "999", palladium_999, "-",                                                 "-"),
+        ("Silver",    10, "-",   silver_rate,   rsbl_silver_raw / 100 if rsbl_silver_raw else "-",   "-"),
     ]
 
-    headers = ["Metal", "Grams", "Purity", "Today Rate", "RSBL", "Arihant"]
+    rows_html = ""
+    for metal, grams, purity, today, rsbl_v, arihant_v in data_rows:
+        rows_html += "<tr>"
+        rows_html += td(metal,          bg=METAL_BG[metal], text="#000000", bold=True)
+        rows_html += td(grams,          bg="#BABABA",        text="#000000", align="right")
+        rows_html += td(purity,         bg="#FF69B4",        text="#000000", bold=True)
+        rows_html += td(fmt(today),     bg="#F6BEF8",        text="#000000", align="right")
+        rows_html += td(fmt(rsbl_v),    bg="#D8D8D8",        text="#000000", align="right")
+        rows_html += td(fmt(arihant_v), bg="#F4B183",        text="#000000", align="right")
+        rows_html += "</tr>\n"
 
-    # ─────────────────────────────────────────────
-    # HTML REPORT
-    # ─────────────────────────────────────────────
-    html = """
-    <html>
-    <head>
-    <style>
-        body { font-family: Arial; background: #020617; color: white; }
-        table { border-collapse: collapse; width: 95%; margin: 40px auto; }
-        th, td { padding: 12px; text-align: center; }
-        th { background: #1e293b; }
-        tr:nth-child(even) { background: #0f172a; }
-        tr:nth-child(odd) { background: #1e293b; }
-        td { font-weight: bold; }
-        .gold { color: #facc15; }
-        .platinum { color: #e5e7eb; }
-        .palladium { color: #c084fc; }
-        .silver { color: #93c5fd; }
-    </style>
-    </head>
-    <body>
+    # ── HTML OUTPUT ────────────────────────────────────────────────────────
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Metal Rate Report</title></head>
+<body style="margin:0;padding:20px;font-family:Arial,sans-serif;background-color:#FFFFFF;color:#222222;">
 
-    <h2 style="text-align:center;">Metal Rate Report (₹/10g)</h2>
-    <table border="1">
-    <tr>
-    """
+<p style="margin:0 0 5px 0;font-size:14px;font-family:Arial,sans-serif;">Dear All,</p>
+<p style="margin:0 0 16px 0;font-size:14px;font-family:Arial,sans-serif;">Please see the below metal rate.</p>
 
-    for h in headers:
-        html += f"<th>{h}</th>"
-    html += "</tr>"
+<table cellpadding="0" cellspacing="0" border="0"
+  style="border-collapse:collapse;width:100%;max-width:680px;font-family:Arial,sans-serif;">
 
-    for row in rows:
-        cls = row[0].lower()
-        html += f"<tr class='{cls}'>"
-        for cell in row:
-            html += f"<td>{round(cell,2) if isinstance(cell,(int,float)) else cell}</td>"
-        html += "</tr>"
+  <!-- ① Top coral/salmon stripe -->
+  <tr>
+    <td colspan="6"
+      style="background-color:#F4A7A3;height:12px;font-size:1px;line-height:1px;
+             border:1px solid {BORDER};">&nbsp;</td>
+  </tr>
 
-    html += "</table></body></html>"
+  <!-- ② Date header — purple -->
+  <tr>
+    <td colspan="3"
+      style="background-color:#A45DB5;color:#FFFFFF;font-size:13px;font-family:Arial,sans-serif;
+             font-weight:bold;padding:6px 10px;border:1px solid {BORDER};">
+      <u>Metal Rates for the date:</u>
+    </td>
+    <td colspan="3"
+      style="background-color:#A45DB5;color:#FFFFFF;font-size:13px;font-family:Arial,sans-serif;
+             font-weight:bold;padding:6px 10px;border:1px solid {BORDER};">
+      <u>{today_str}</u>
+    </td>
+  </tr>
+
+  <!-- ③ Column headers -->
+  <tr>
+    {th("Metal",      "#FFD700")}
+    {th("Grams",      "#BABABA")}
+    {th("Purity",     "#FF69B4")}
+    {th("Today Rate", "#F6BEF8")}
+    {th("RSBL",       "#D8D8D8")}
+    {th("Arihant",    "#F4B183")}
+  </tr>
+
+  <!-- ④ Data rows -->
+  {rows_html}
+
+  <!-- ⑤ Note row -->
+  <tr>
+    <td colspan="6"
+      style="background-color:#BFEFFF;color:#000000;font-size:12px;font-family:Arial,sans-serif;
+             padding:6px 10px;text-align:left;border:1px solid {BORDER};">
+      
+    </td>
+  </tr>
+
+</table>
+
+<p style="margin:16px 0 0 0;font-size:13px;font-family:Arial,sans-serif;">
+  <b>NOTE : 999 Gold rate not available in Arihant spot site.</b>
+</p>
+
+</body>
+</html>"""
 
     out_path = output_folder / "rates_table.html"
     out_path.write_text(html, encoding="utf-8")
 
-    log("\n📊 HTML REPORT GENERATED")
-    log(f"📂 Saved at: {out_path}")
-
-    log("\n" + "="*70)
+    log(f"\n📊 HTML REPORT SAVED: {out_path}")
     log("✅ ENGINE COMPLETE")
-    log("="*70)
 
-# ##Test
-# RUN_FOLDER = Path(r"C:\Users\Aman.gupta\Downloads\metal-rate-bot\scraper_output\04-05-2026_02-48-20PM")
 
-# master_path = RUN_FOLDER / "master.json"
+##Test
+RUN_FOLDER = Path(r"D:\Projects\metal-parse\scraper_output\07-05-2026_11-09-08AM")
 
-# print(f"\n📂 Loading: {master_path}")
+master_path = RUN_FOLDER / "master.json"
 
-# with open(master_path, "r", encoding="utf-8") as f:
-#     master_data = json.load(f)
+print(f"\n📂 Loading: {master_path}")
 
-# # Run your function
-# build_rates_table(master_data, RUN_FOLDER, debug=True)
+with open(master_path, "r", encoding="utf-8") as f:
+    master_data = json.load(f)
+
+# Run your function
+build_rates_table(master_data, RUN_FOLDER, debug=True)
