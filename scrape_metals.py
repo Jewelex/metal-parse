@@ -258,15 +258,19 @@ def take_full_page_screenshot(driver: webdriver.Chrome, path: Path):
     try:
         total_width  = driver.execute_script("return document.body.scrollWidth")
         total_height = driver.execute_script("return document.body.scrollHeight")
-        # Cap height to avoid memory issues on very tall pages
-        total_height = min(total_height, 15000)
+        total_height = min(total_height, 5000)   # was 15000, too large
         driver.set_window_size(max(total_width, 1400), total_height)
         time.sleep(0.3)
         driver.save_screenshot(str(path))
-        driver.set_window_size(1400, 900)   # restore
+        driver.set_window_size(1400, 900)
     except Exception as e:
         print(f"    ⚠️  Full-page screenshot failed ({e}), using viewport screenshot")
-        driver.save_screenshot(str(path))
+        try:
+            driver.set_window_size(1400, 900)
+            driver.save_screenshot(str(path))
+        except Exception:
+            print(f"    ⚠️  Viewport screenshot also failed, skipping")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PER-SITE SCRAPING
@@ -426,7 +430,7 @@ def scrape_site(driver: webdriver.Chrome, site: dict, run_folder: Path) -> dict:
         print("🔄 Using direct visible-text extraction...")
 
         # wait more
-        time.sleep(30)
+        time.sleep(15)
 
         # click LIVE RATES if present
         try:
@@ -435,7 +439,7 @@ def scrape_site(driver: webdriver.Chrome, site: dict, run_folder: Path) -> dict:
                 "//*[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'LIVE RATES')]"
             )
             driver.execute_script("arguments[0].click();", btn)
-            time.sleep(30)
+            time.sleep(10)
         except:
             pass
 
