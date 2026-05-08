@@ -106,8 +106,8 @@ def build_rates_table(master_data: dict, output_folder: Path, debug=True):
 
     METAL_BG = {
         "Gold":      "#FFD700",
-        "Platinum":  "#FF69B4",
-        "Palladium": "#BEBEBE",
+        "Platinum":  "#FFD700",
+        "Palladium": "#FFD700",
         "Silver":    "#FFD700",
     }
 

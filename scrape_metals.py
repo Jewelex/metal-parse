@@ -680,9 +680,13 @@ def main():
     
     # ── Build HTML table ─────────────────────────────
     build_rates_table(master, run_folder)
-    RECIPIENTS = ["aman.gupta@jewelexindia.com", "ketan.shah@bitalinfo.com", "aashay.mehta@jewelexindia.com"]  # CHANGE THIS!
-    # RECIPIENTS = ["aman.gupta@jewelexindia.com", "aashay.mehta@jewelexindia.com"]
-    send_metal_rate_report(run_folder, RECIPIENTS)
+    RECIPIENTS = os.getenv("RECIPIENTS", "").split(",")
+    RECIPIENTS = [email.strip() for email in RECIPIENTS if email.strip()]
+    
+    if not RECIPIENTS:
+        print("⚠️  No RECIPIENTS found in .env file! Skipping email.")
+    else:
+        send_metal_rate_report(run_folder, RECIPIENTS)
 
     # ── Final summary ─────────────────────────────────────────────────────────
     print(f"\n{'═'*60}")
