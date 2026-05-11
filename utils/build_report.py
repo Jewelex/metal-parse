@@ -40,10 +40,16 @@ def build_rates_table(master_data: dict, output_folder: Path, debug=True):
     gold_995  = gold_calc["rate_for_10gm_995"]
 
     # ── PLATINUM ───────────────────────────────────────────────────────────
-    plat_calc_999 = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex, purity=999)
-    plat_calc_950 = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex, purity=950)
-    platinum_999  = plat_calc_999["rate_for_10gm_999"]
-    platinum_950  = plat_calc_950["rate_for_10gm_999"]
+    # plat_calc_999 = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex, purity=999)
+    # plat_calc_950 = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex, purity=950)
+    # platinum_999  = plat_calc_999["rate_for_10gm_999"]
+    # platinum_950  = plat_calc_950["rate_for_10gm_999"]
+
+        # ── PLATINUM ───────────────────────────────────────────────────────────
+    plat_calc    = calculate_platinum_rate(kitco_rate=kitco_prices.get("PLATINUM"), forex_rate=forex)
+    platinum_999 = plat_calc["rate_for_10gm_999"]
+    platinum_950 = plat_calc["rate_for_10gm_950"]
+
 
     # ── PALLADIUM ──────────────────────────────────────────────────────────
     palladium_999 = palladium_india.get("spot_prices_inr", {}).get("10_gram")
