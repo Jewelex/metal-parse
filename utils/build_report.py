@@ -3,8 +3,10 @@ import json
 from datetime import date
 from utils.goldformula import calculate_gold_rate
 from utils.platinumformula import calculate_platinum_rate
+from utils.palladiumformula import calculate_palladium_rate
 # from goldformula import calculate_gold_rate
 # from platinumformula import calculate_platinum_rate
+
 
 
 def build_rates_table(master_data: dict, output_folder: Path, debug=True):
@@ -52,8 +54,17 @@ def build_rates_table(master_data: dict, output_folder: Path, debug=True):
 
 
     # ── PALLADIUM ──────────────────────────────────────────────────────────
-    palladium_999 = palladium_india.get("spot_prices_inr", {}).get("10_gram")
+    # palladium_999 = palladium_india.get("spot_prices_inr", {}).get("10_gram")
+    # ── PALLADIUM ──────────────────────────────────────────────────────────
+    raw_palladium = palladium_india.get("spot_prices_inr", {}).get("10_gram")
 
+    # If the scraped source is already 10gm, do NOT feed it as per-gram.
+    # Either use the raw value directly, or first convert your source to per-gram.
+
+    palladium_calc = calculate_palladium_rate(cif_per_gram=4605.25)
+    palladium_999 = palladium_calc["rate_for_10gm_999"]
+
+    
     # ── SILVER ─────────────────────────────────────────────────────────────
     silver_rate     = None
     rsbl_silver_raw = None

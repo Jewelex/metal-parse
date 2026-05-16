@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
+# scrape_metals.py  –  MinIO edition (no local file storage)
+
 import os
 import re
+import io
 import json
 import time
+import tempfile
 import argparse
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()   # loads GROQ_API_KEY (and anything else) from .env into os.environ
+load_dotenv()
 
 # ── Selenium ──────────────────────────────────────────────────────────────────
 from selenium import webdriver
@@ -19,27 +23,40 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
-from utils.build_report import build_rates_table
 
 # ── HTML parsing ──────────────────────────────────────────────────────────────
 from bs4 import BeautifulSoup
+
+# ── Project utilities ─────────────────────────────────────────────────────────
+from utils.build_report import build_rates_table
 from utils.send_email import send_metal_rate_report
+from utils.s3_storage import (                                    # ← NEW
+    get_s3_client,
+    ensure_bucket,
+    upload_bytes,
+    upload_json,
+    upload_file,
+    build_run_prefix,
+    get_object_url,
+)
 
 # ── Groq ──────────────────────────────────────────────────────────────────────
 try:
     from groq import Groq
 except ImportError:
-    raise SystemExit("❌  Run: pip install groq")
+    raise SystemExit("Run: pip install groq")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
 GROQ_MODEL   = "llama-3.3-70b-versatile"
-PAGE_TIMEOUT = 30          # seconds to wait for key element
-SCROLL_PAUSE = 1.5         # seconds after scrolling
+PAGE_TIMEOUT = 30
+SCROLL_PAUSE = 1.5
 
-# Per-site config: URL, what element to wait for, and whether to scroll
+MINIO_BUCKET = "metal-rates"                                      # ← NEW
+
 SITES = [
     {
         "id":            "kitco",
@@ -66,21 +83,21 @@ SITES = [
         "wait_by":       By.CSS_SELECTOR,
         "wait_for":      "table",
         "scroll":        False,
-        "extra_wait":    3,   # rates need a moment to load via AJAX
+        "extra_wait":    3,
     },
     {
-    "id": "arihantspot",
-    "name": "Arihant Spot – Live Rates",
-    "url": "https://www.arihantspot.in/",
-    "wait_by": By.TAG_NAME,
-    "wait_for": "body",
-    "scroll": True,
-    "extra_wait": 10
+        "id":            "arihantspot",
+        "name":          "Arihant Spot – Live Rates",
+        "url":           "https://www.arihantspot.in/",
+        "wait_by":       By.TAG_NAME,
+        "wait_for":      "body",
+        "scroll":        True,
+        "extra_wait":    10,
     },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ EXTRACTION PROMPTS  (one per site, tuned to the exact data visible)
+# GROQ PROMPTS  (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 GROQ_PROMPTS = {
@@ -197,8 +214,16 @@ All numeric fields must be numbers. Use null if missing.
 """,
 }
 
+SITE_SOURCE = {
+    "kitco":                    "kitco.com",
+    "goldpriceindia_palladium": "goldpriceindia.com",
+    "rsbl":                     "rsbl.in",
+    "arihantspot":              "arihantspot.in",
+}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# SELENIUM DRIVER SETUP
+# HELPERS  (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def replace_nulls(obj):
@@ -210,17 +235,11 @@ def replace_nulls(obj):
         return ""
     return obj
 
+
 def create_driver(headless: bool = True) -> webdriver.Chrome:
-    """
-    Create a Chrome WebDriver that looks like a real user browser.
-    Uses webdriver-manager to auto-download the right ChromeDriver.
-    """
     options = Options()
-
     if headless:
-        options.add_argument("--headless=new")   # modern headless mode
-
-    # Stealth settings — avoid being detected as a bot
+        options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
@@ -233,177 +252,47 @@ def create_driver(headless: bool = True) -> webdriver.Chrome:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
-
-    # Hide the "Chrome is being controlled by automated software" bar
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-
     service = Service(ChromeDriverManager().install())
-    driver  = webdriver.Chrome(service=service, options=options)
-
-    # Spoof navigator.webdriver = false
+    driver = webdriver.Chrome(service=service, options=options)
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"}
+        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
     )
-
     return driver
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# FULL-PAGE SCREENSHOT  (Selenium takes viewport shots; we expand to full page)
+# SCREENSHOT → bytes (no local file needed)                         ← CHANGED
 # ─────────────────────────────────────────────────────────────────────────────
 
-def take_full_page_screenshot(driver: webdriver.Chrome, path: Path):
-    """Resize browser to full page height, screenshot, then restore."""
+def take_full_page_screenshot_bytes(driver: webdriver.Chrome) -> bytes | None:
+    """Return a PNG screenshot as bytes (full-page where possible)."""
     try:
-        total_width  = driver.execute_script("return document.body.scrollWidth")
+        total_width = driver.execute_script("return document.body.scrollWidth")
         total_height = driver.execute_script("return document.body.scrollHeight")
-        total_height = min(total_height, 5000)   # was 15000, too large
+        total_height = min(total_height, 5000)
         driver.set_window_size(max(total_width, 1400), total_height)
         time.sleep(0.3)
-        driver.save_screenshot(str(path))
+        png = driver.get_screenshot_as_png()
         driver.set_window_size(1400, 900)
+        return png
     except Exception as e:
-        print(f"    ⚠️  Full-page screenshot failed ({e}), using viewport screenshot")
+        print(f"    ⚠️  Full-page screenshot failed ({e}), using viewport")
         try:
             driver.set_window_size(1400, 900)
-            driver.save_screenshot(str(path))
+            return driver.get_screenshot_as_png()
         except Exception:
-            print(f"    ⚠️  Viewport screenshot also failed, skipping")
+            print(f"    ⚠️  Viewport screenshot also failed")
+            return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PER-SITE SCRAPING
+# PER-SITE SCRAPING  (returns screenshot bytes instead of path)      ← CHANGED
 # ─────────────────────────────────────────────────────────────────────────────
 
-# def scrape_site(driver: webdriver.Chrome, site: dict, run_folder: Path) -> dict:
-#     """
-#     Navigate to site, wait for data, take screenshot, extract HTML/text.
-#     Includes Arihant dynamic loading fix.
-#     """
-
-#     sid = site["id"]
-#     url = site["url"]
-
-#     print(f"\n   Loading: {url}")
-
-#     result = {
-#         "id": sid,
-#         "name": site["name"],
-#         "url": url,
-#         "raw_text": "",
-#         "raw_html": "",
-#         "tables": [],
-#         "screenshot_path": ""
-#     }
-
-#     try:
-#         driver.get(url)
-#     except Exception as e:
-#         print(f" Navigation error: {e}")
-#         result["error"] = str(e)
-#         return result
-
-#     # Wait for base page
-#     try:
-#         WebDriverWait(driver, 30).until(
-#             EC.presence_of_element_located((site["wait_by"], site["wait_for"]))
-#         )
-#     except:
-#         pass
-
-#     # General wait
-#     time.sleep(site.get("extra_wait", 3))
-
-#     # ─────────────────────────────────────────────
-#     # SPECIAL FIX FOR ARIHANT
-#     # ─────────────────────────────────────────────
-#     if sid == "arihantspot":
-#         print(" Applying Arihant dynamic content fix...")
-
-#         try:
-#             # Click LIVE RATES if exists
-#             elems = driver.find_elements(
-#                 By.XPATH,
-#                 "//*[contains(text(),'LIVE RATES')]"
-#             )
-#             if elems:
-#                 driver.execute_script("arguments[0].click();", elems[0])
-#                 time.sleep(3)
-#         except:
-#             pass
-
-#         # Scroll multiple times to trigger JS lazy loading
-#         driver.execute_script("window.scrollTo(0,500)")
-#         time.sleep(2)
-
-#         driver.execute_script("window.scrollTo(0,1000)")
-#         time.sleep(2)
-
-#         driver.execute_script("window.scrollTo(0,0)")
-#         time.sleep(2)
-
-#         # Wait until numbers appear in source
-#         try:
-#             WebDriverWait(driver, 20).until(
-#                 lambda d: any(
-#                     x in d.page_source
-#                     for x in ["995", "999", "GOLD", "SILVER", "149", "151"]
-#                 )
-#             )
-#             print("     Rates detected")
-#         except:
-#             print("     Rates not detected, continuing")
-
-#     # Normal scrolling
-#     if site.get("scroll"):
-#         driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-#         time.sleep(2)
-#         driver.execute_script("window.scrollTo(0, 0)")
-#         time.sleep(1)
-
-#     # Screenshot
-#     screenshot_path = run_folder / f"{sid}.png"
-#     take_full_page_screenshot(driver, screenshot_path)
-#     result["screenshot_path"] = str(screenshot_path)
-
-#     # HTML
-#     raw_html = driver.page_source
-#     result["raw_html"] = raw_html
-
-#     soup = BeautifulSoup(raw_html, "lxml")
-
-#     for tag in soup(["script", "style", "nav", "footer", "iframe", "noscript"]):
-#         tag.decompose()
-
-#     result["raw_text"] = soup.get_text(separator="\n", strip=True)
-
-#     # Tables
-#     for tbl in soup.find_all("table"):
-#         rows = []
-
-#         for tr in tbl.find_all("tr"):
-#             cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-#             if any(cells):
-#                 rows.append(cells)
-
-#         if len(rows) > 1:
-#             result["tables"].append(rows)
-
-#     print(f"     Extracted {len(result['tables'])} tables")
-
-#     return result
-
-# FINAL FIX: Arihant prices are rendered inside JavaScript DOM widgets,
-# not normal tables. Your current extractor sends useless HTML to Groq.
-# So now we directly read visible text using Selenium before BeautifulSoup.
-# Because some websites believe data should be hidden like state secrets.
-
-# ─────────────────────────────────────────────────────────────
-# REPLACE ONLY scrape_site() WITH THIS VERSION
-# ─────────────────────────────────────────────────────────────
-
-def scrape_site(driver: webdriver.Chrome, site: dict, run_folder: Path) -> dict:
+def scrape_site(driver: webdriver.Chrome, site: dict) -> dict:
     sid = site["id"]
     url = site["url"]
 
@@ -416,71 +305,49 @@ def scrape_site(driver: webdriver.Chrome, site: dict, run_folder: Path) -> dict:
         "raw_text": "",
         "raw_html": "",
         "tables": [],
-        "screenshot_path": ""
+        "screenshot_png": None,                                   # ← bytes now
     }
 
     driver.get(url)
     time.sleep(site.get("extra_wait"))
 
-    # ─────────────────────────────────────────────
-    # SPECIAL HANDLING FOR ARIHANT
-    # ─────────────────────────────────────────────
+    # ── ARIHANT special handling ──────────────────────────────────────────
     if sid == "arihantspot":
-
         print("🔄 Using direct visible-text extraction...")
-
-        # wait more
         time.sleep(15)
-
-        # click LIVE RATES if present
         try:
             btn = driver.find_element(
                 By.XPATH,
-                "//*[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'LIVE RATES')]"
+                "//*[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz',"
+                "'ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'LIVE RATES')]",
             )
             driver.execute_script("arguments[0].click();", btn)
             time.sleep(10)
-        except:
+        except Exception:
             pass
-
-        # trigger lazy load
         for y in [400, 800, 1200, 0]:
             driver.execute_script(f"window.scrollTo(0,{y})")
             time.sleep(2)
 
-        # IMPORTANT:
-        # grab visible rendered text from browser
         visible_text = driver.find_element(By.TAG_NAME, "body").text
-
-        # save raw html too
         raw_html = driver.page_source
-
         result["raw_text"] = visible_text
         result["raw_html"] = raw_html
 
-        # Build pseudo table from visible lines
         lines = [x.strip() for x in visible_text.split("\n") if x.strip()]
-
         rows = []
         for line in lines:
             if any(word in line.upper() for word in ["GOLD", "SILVER", "995", "999"]):
                 rows.append([line])
-
         if rows:
             result["tables"].append(rows)
-
     else:
-        # normal sites
         raw_html = driver.page_source
         result["raw_html"] = raw_html
-
         soup = BeautifulSoup(raw_html, "lxml")
-
         for tag in soup(["script", "style", "nav", "footer", "iframe"]):
             tag.decompose()
-
         result["raw_text"] = soup.get_text(separator="\n", strip=True)
-
         for tbl in soup.find_all("table"):
             rows = []
             for tr in tbl.find_all("tr"):
@@ -490,47 +357,38 @@ def scrape_site(driver: webdriver.Chrome, site: dict, run_folder: Path) -> dict:
             if len(rows) > 1:
                 result["tables"].append(rows)
 
-    # screenshot
-    screenshot_path = run_folder / f"{sid}.png"
-    take_full_page_screenshot(driver, screenshot_path)
-    result["screenshot_path"] = str(screenshot_path)
+    # Screenshot → bytes                                          ← CHANGED
+    result["screenshot_png"] = take_full_page_screenshot_bytes(driver)
 
     print(f"📊 Tables found: {len(result['tables'])}")
-
     return result
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ  —  raw data → structured JSON
+# GROQ  (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_groq_payload(scraped: dict, scraped_at: str) -> str:
-    """Assemble the user message for Groq from scraped data."""
     parts = [
         f"scraped_at: {scraped_at}",
         f"source_url: {scraped['url']}",
         "",
     ]
-
-    # Tables first — most structured, best for accurate number extraction
     if scraped["tables"]:
         parts.append("=== HTML TABLES (structured data) ===")
         for i, tbl in enumerate(scraped["tables"][:6]):
             parts.append(f"\n-- Table {i+1} --")
             for row in tbl[:25]:
                 parts.append("  " + "  |  ".join(str(c) for c in row))
-
-    # Then raw text for context (headers, labels, etc.)
     if scraped["raw_text"]:
         parts.append("\n=== PAGE TEXT ===")
         parts.append(scraped["raw_text"][:6000])
-
     return "\n".join(parts)
 
 
 def call_groq(client: Groq, site_source: str, scraped: dict, scraped_at: str) -> dict:
-    """Send scraped data to Groq LLM and return parsed JSON."""
     system_prompt = GROQ_PROMPTS.get(site_source, "Extract all data as clean JSON.")
-    user_content  = build_groq_payload(scraped, scraped_at)
+    user_content = build_groq_payload(scraped, scraped_at)
 
     print(f"    🤖  Groq [{GROQ_MODEL}] extracting {site_source} …")
     try:
@@ -538,23 +396,18 @@ def call_groq(client: Groq, site_source: str, scraped: dict, scraped_at: str) ->
             model=GROQ_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_content},
+                {"role": "user", "content": user_content},
             ],
             temperature=0,
             max_tokens=2048,
         )
         raw = response.choices[0].message.content.strip()
-
-        # Strip markdown fences (```json ... ```) if present
         raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
-        raw = re.sub(r"\s*```$",          "", raw)
-
+        raw = re.sub(r"\s*```$", "", raw)
         result = json.loads(raw)
-        
-        result = replace_nulls(result)   # ← add this
+        result = replace_nulls(result)
         print(f"    ✅  JSON extracted  ({len(result)} top-level keys)")
         return result
-
     except json.JSONDecodeError as e:
         print(f"    ⚠️  JSON parse error: {e}")
         return {"_raw_reply": raw, "_parse_error": str(e)}
@@ -562,147 +415,141 @@ def call_groq(client: Groq, site_source: str, scraped: dict, scraped_at: str) ->
         print(f"    ❌  Groq error: {e}")
         return {"_error": str(e)}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OUTPUT FOLDER  —  DD-MM-YYYY_HH-MM-SSam
-# ─────────────────────────────────────────────────────────────────────────────
-
-def make_run_folder(base: Path) -> Path:
-    label  = datetime.now().strftime("%d-%m-%Y_%I-%M-%S%p")   # 28-04-2026_10-01-30AM
-    folder = base / label
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SITE → SOURCE  mapping for GROQ_PROMPTS lookup
-# ─────────────────────────────────────────────────────────────────────────────
-
-SITE_SOURCE = {
-    "kitco":                    "kitco.com",
-    "goldpriceindia_palladium": "goldpriceindia.com",
-    "rsbl":                     "rsbl.in",
-    "arihantspot":              "arihantspot.in",
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
+# MAIN                                                               ← CHANGED
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Precious Metals Scraper (Selenium)")
-    parser.add_argument("--output-dir",   default="./scraper_output",
-                        help="Base output directory  (default: ./scraper_output)")
-    parser.add_argument("--headless",     default="true", choices=["true", "false"],
+    parser = argparse.ArgumentParser(description="Precious Metals Scraper (Selenium + MinIO)")
+    parser.add_argument("--headless", default="true", choices=["true", "false"],
                         help="Run Chrome headless  (default: true)")
     parser.add_argument("--groq-api-key", default=os.environ.get("GROQ_API_KEY"),
-                        help="Groq API key  (or set GROQ_API_KEY in .env file)")
+                        help="Groq API key  (or set GROQ_API_KEY in .env)")
+    parser.add_argument("--minio-endpoint", default=os.environ.get("MINIO_ENDPOINT", "http://192.168.100.149:9000"),
+                        help="MinIO endpoint URL")
+    parser.add_argument("--minio-bucket", default=os.environ.get("MINIO_BUCKET", MINIO_BUCKET),
+                        help="MinIO bucket name")
     args = parser.parse_args()
 
-    # ── Validate API key ──────────────────────────────────────────────────────
     if not args.groq_api_key:
         raise SystemExit(
             "❌  GROQ_API_KEY not found.\n"
-            "    Add it to your .env file:\n"
-            "        GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxx\n"
-            "    Or pass it directly:\n"
-            "        python scrape_metals.py --groq-api-key gsk_xxxx"
+            "    Add it to your .env file or pass --groq-api-key"
         )
 
     groq_client = Groq(api_key=args.groq_api_key)
-    run_folder  = make_run_folder(Path(args.output_dir))
-    scraped_at  = datetime.now().isoformat()
-    headless    = args.headless.lower() == "true"
+    scraped_at = datetime.now().isoformat()
+    headless = args.headless.lower() == "true"
+
+    # ── MinIO setup ───────────────────────────────────────────────── ← NEW
+    s3 = get_s3_client(endpoint_url=args.minio_endpoint)
+    bucket = args.minio_bucket
+    ensure_bucket(s3, bucket)
+    run_prefix = build_run_prefix()  # e.g. "runs/28-04-2026_10-01-30AM"
 
     print(f"\n{'═'*60}")
-    print(f"  Precious Metals Scraper  —  Selenium")
-    print(f"  Run folder : {run_folder}")
+    print(f"  Precious Metals Scraper  —  Selenium + MinIO")
+    print(f"  S3 bucket  : {bucket}")
+    print(f"  Run prefix : {run_prefix}/")
     print(f"  Headless   : {headless}")
     print(f"  Groq model : {GROQ_MODEL}")
     print(f"{'═'*60}")
 
     all_data = {}
-    summary  = []
+    summary = []
 
-    # ── Single browser session for all 4 sites ────────────────────────────────
     print("\n🚀  Starting Chrome …")
     driver = create_driver(headless=headless)
 
     try:
         for site in SITES:
-            sid    = site["id"]
+            sid = site["id"]
             source = SITE_SOURCE[sid]
 
             print(f"\n{'─'*60}")
             print(f"  [{sid.upper()}]  {site['name']}")
             print(f"{'─'*60}")
 
-            # 1. Scrape page + take screenshot
-            scraped = scrape_site(driver, site, run_folder)
+            # 1. Scrape
+            scraped = scrape_site(driver, site)
 
-            # 2. Send to Groq → structured JSON
+            # 2. Upload screenshot to MinIO                       ← NEW
+            screenshot_key = None
+            if scraped["screenshot_png"]:
+                screenshot_key = f"{run_prefix}/{sid}.png"
+                upload_bytes(s3, bucket, screenshot_key, scraped["screenshot_png"], "image/png")
+                print(f"    📸  Uploaded → s3://{bucket}/{screenshot_key}")
+
+            # 3. Groq extraction
             parsed = call_groq(groq_client, source, scraped, scraped_at)
 
-            # 3. Attach metadata to the JSON
+            # 4. Attach metadata (S3 key instead of local path)  ← CHANGED
             parsed["_meta"] = {
-                "source_id":       sid,
-                "source":          source,
-                "scraped_at":      scraped_at,
-                "screenshot_file": Path(scraped["screenshot_path"]).name
-                                   if scraped["screenshot_path"] else None,
-                "tables_found":    len(scraped["tables"]),
+                "source_id": sid,
+                "source": source,
+                "scraped_at": scraped_at,
+                "screenshot_s3_key": screenshot_key,
+                "tables_found": len(scraped["tables"]),
             }
 
-            # 4. Save individual JSON file
-            json_path = run_folder / f"{sid}.json"
-            json_path.write_text(json.dumps(parsed, indent=2, ensure_ascii=False),
-                                 encoding="utf-8")
-            print(f"    💾  Saved → {json_path.name}")
-
+            # 5. NO individual JSON files saved                   ← CHANGED
             all_data[sid] = parsed
             summary.append({
-                "site":            source,
-                "json_file":       json_path.name,
-                "screenshot_file": Path(scraped["screenshot_path"]).name
-                                   if scraped["screenshot_path"] else None,
-                "status":          "error" if ("_error" in parsed or "error" in scraped)
-                                   else "ok",
+                "site": source,
+                "screenshot_s3_key": screenshot_key,
+                "status": "error" if ("_error" in parsed or "error" in scraped) else "ok",
             })
 
     finally:
         driver.quit()
         print("\n🔒  Browser closed")
 
-    # ── Master JSON (all 4 sites combined) ────────────────────────────────────
+    # ── Master JSON → MinIO ───────────────────────────────────── ← CHANGED
     master = {
         "run_timestamp": scraped_at,
-        "run_folder":    str(run_folder),
-        "sites":         summary,
-        "data":          all_data,
+        "s3_bucket": bucket,
+        "s3_run_prefix": run_prefix,
+        "sites": summary,
+        "data": all_data,
     }
-    master_path = run_folder / "master.json"
-    master_path.write_text(json.dumps(master, indent=2, ensure_ascii=False),
-                           encoding="utf-8")
-    
-    # ── Build HTML table ─────────────────────────────
-    build_rates_table(master, run_folder)
-    RECIPIENTS = os.getenv("RECIPIENTS", "").split(",")
-    RECIPIENTS = [email.strip() for email in RECIPIENTS if email.strip()]
-    
-    if not RECIPIENTS:
-        print("⚠️  No RECIPIENTS found in .env file! Skipping email.")
-    else:
-        send_metal_rate_report(run_folder, RECIPIENTS)
+    master_key = f"{run_prefix}/master.json"
+    upload_json(s3, bucket, master_key, master)
+    print(f"\n💾  master.json → s3://{bucket}/{master_key}")
 
-    # ── Final summary ─────────────────────────────────────────────────────────
+    # ── Build HTML table → MinIO ──────────────────────────────── ← CHANGED
+    #    build_rates_table writes to a local folder, so we use a tempdir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        build_rates_table(master, tmp_path)
+
+        html_file = tmp_path / "rates_table.html"
+        if html_file.exists():
+            html_key = f"{run_prefix}/rates_table.html"
+            upload_file(s3, bucket, html_key, html_file, "text/html")
+            print(f"📊  rates_table.html → s3://{bucket}/{html_key}")
+
+        # ── Email (still reads from local tmpdir) ─────────────────
+        RECIPIENTS = os.getenv("RECIPIENTS", "").split(",")
+        RECIPIENTS = [email.strip() for email in RECIPIENTS if email.strip()]
+
+        if not RECIPIENTS:
+            print("⚠️  No RECIPIENTS found in .env file! Skipping email.")
+        else:
+            send_metal_rate_report(tmp_path, RECIPIENTS)
+
+    # ── Final summary ─────────────────────────────────────────────
     print(f"\n{'═'*60}")
     print(f"  ✅  DONE  —  {len(SITES)} sites scraped")
-    print(f"  📂  {run_folder}")
+    print(f"  🪣  s3://{bucket}/{run_prefix}/")
     print(f"{'═'*60}")
     for s in summary:
         icon = "✅" if s["status"] == "ok" else "❌"
         print(f"  {icon}  {s['site']}")
-        print(f"         📸  {s['screenshot_file']}")
-        print(f"         💾  {s['json_file']}")
-    print(f"\n  📄  master.json  (all sites combined)\n")
+        if s["screenshot_s3_key"]:
+            print(f"         📸  {s['screenshot_s3_key']}")
+    print(f"\n  📄  {master_key}")
+    print(f"  📊  {run_prefix}/rates_table.html\n")
 
 
 if __name__ == "__main__":

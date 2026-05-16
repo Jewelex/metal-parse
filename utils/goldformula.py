@@ -6,7 +6,7 @@ def calculate_gold_rate(
     sales_commission=0.015, # C6
     oz_per_gram=31.99,      # E8: oz per gram denominator
     forex_rate=95.2555,     # E9: INR per USD
-    custom_duty=0.06,       # C10
+    custom_duty=0.15,       # C10
     stamp_duty=3115         # D11: fixed ₹ stamp duty
 ):
     # D5 = gold_rate + premium

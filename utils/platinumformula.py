@@ -126,8 +126,8 @@ def calculate_platinum_rate(
     oz_per_gram=31.1035,      # oz per gram denominator
     airfreight=0.5,           # Airfreight USD
     forex_rate=95.2555,       # INR per USD
-    custom_duty=0.05,         # Custom duty %
-    aidc=0.014,               # AIDC %
+    custom_duty=0.10,         # Custom duty 10%
+    aidc=0.054,               # AIDC 5.4%              # AIDC %
     jewellery_pct=0.952,      # Jewellery %
     spl_alloy_charges=120,    # Fixed alloy charges
     gst_pct=0,
